@@ -1,0 +1,796 @@
+---
+title: "legume-AMF-rhizobia"
+output: html_document
+date: "2025-06-20"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+#package upload
+```{r}
+installed.packages("librarian")
+library(librarian)
+shelf(tidyverse, agricolae, Hmisc, lme4, dplyr, ggplot2, emmeans, readr, nlme, lsmeans, multcomp, tidyr, installr, multcompView, vegan, lmerTest, ggsignif, plyr, janitor, lubridate, wesanderson, ggpubr, cowplot, viridis, scales, glmmTMB, reshape2, patchwork, stringr, DHARMa)
+
+```
+
+###data upload
+
+```{r}
+legume_df <- read_csv("legume.shoot.root.amf.rhizobia.csv") %>% mutate(Mutualist=case_when(Mutualist=="control"~"Control", Mutualist=="A"~"AMF", Mutualist=="Rh"~"Rhizobia", Mutualist=="RhA"~"AMF+Rhizobia")) %>% mutate( Carbon = factor(Carbon, levels = c("400","600","1000")))
+str(legume_df)
+legume_df$Chamber=as.character(legume_df$Chamber)
+legume_df$Carbon=as.character(legume_df$Carbon)
+
+#checking normality and transforming shoot biomass
+hist(legume_df$Shoot_biomass_g)
+legume_df$log_shoot.biomass <- log(legume_df$Shoot_biomass_g)
+
+#checking normality and transforming root biomass
+hist(legume_df$Root_biomass_g)
+legume_df$log_root.biomass <- log(legume_df$Root_biomass_g)
+hist(legume_df$log_root.biomass)
+
+```
+
+#Shoot and root biomass
+```{r}
+#model shoot biomass
+colnames(legume_df)
+model_shoot <- lmer(log(Shoot_biomass_g)~ Carbon* Mutualist + (1  + Mutualist| Chamber), data = legume_df)
+summary(model_shoot)
+anova(model_shoot)
+
+#Model diagnostics
+#Extract residuals and fitted values
+residuals <- resid(model_shoot)
+fitted <- fitted(model_shoot)
+
+#Residuals vs fitted (check for homoscedasticity)
+plot(fitted, residuals, 
+     xlab = "Fitted values", ylab = "Residuals",
+     main = "Residuals vs Fitted")
+abline(h = 0, col = "red")
+
+hist(residuals, breaks = 20, main = "Histogram of residuals")
+emmeans(model_shoot, pairwise ~ Mutualist | Carbon, type = "response")
+
+cld_shoot <- cld(emmeans(model_shoot, ~ Mutualist | Carbon), Letters = letters) %>% mutate(Biomass_Type="Shoot")
+
+
+#model root biomass
+model_root <- lmer(log(Root_biomass_g)~ Carbon* Mutualist + (1  + Mutualist| Chamber), data = legume_df)
+summary(model_root)
+anova(model_root)
+#Extract residuals and fitted values
+residuals <- resid(model_root)
+fitted <- fitted(model_root)
+
+#Residuals vs fitted (check for homoscedasticity)
+plot(fitted, residuals, 
+     xlab = "Fitted values", ylab = "Residuals",
+     main = "Residuals vs Fitted")
+abline(h = 0, col = "red")
+
+hist(residuals, breaks = 20, main = "Histogram of residuals")
+emmeans(model_root, pairwise ~ Mutualist | Carbon, type = "response")
+
+cld_root <- cld(emmeans(model_root, ~ Mutualist | Carbon), Letters = letters)%>% mutate(Biomass_Type="Root")
+
+# Combine both
+cld_combined <- bind_rows(cld_shoot, cld_root)
+
+# Data for plotting
+legume_df2 <- legume_df %>%
+  mutate(Root_biomass_g = -Root_biomass_g)    # flip roots for plotting
+
+legume.plot <- legume_df2 %>%
+  dplyr::select(Carbon, Mutualist, Shoot_biomass_g, Root_biomass_g) %>% pivot_longer(
+    cols      = c(Shoot_biomass_g, Root_biomass_g),
+    names_to  = "Biomass_Type",
+    values_to = "Biomass"
+  ) %>% mutate(Biomass_Type = recode(Biomass_Type,
+                          "Shoot_biomass_g" = "Shoot",
+                          "Root_biomass_g"  = "Root"), Carbon = factor(Carbon, levels = c("400", "600", "1000")))
+
+legume.summary <- legume.plot %>%
+  group_by(Carbon, Mutualist, Biomass_Type) %>%
+ dplyr::summarise(
+    Mean = mean(Biomass, na.rm = TRUE),
+    SE   = sd(Biomass, na.rm = TRUE) / sqrt(n()),
+    .groups = "drop"
+  )
+
+# Estimated marginal means on the model (log) scale
+emm_root  <- emmeans(model_root,  ~ Carbon * Mutualist)
+emm_shoot <- emmeans(model_shoot, ~ Carbon * Mutualist)
+
+# Tukey significant letters
+cld_root <- cld(emm_root, alpha   = 0.05, Letters = letters,adjust  = "tukey")
+
+cld_shoot <- cld(emm_shoot, alpha   = 0.05, Letters = letters,adjust  = "tukey")
+
+# tag as Root vs Shoot
+letters_root <- as.data.frame(cld_root) %>%
+  dplyr::select(Carbon, Mutualist, .group) %>%
+  mutate(
+    Biomass_Type = "Root",
+    sig_letter   = tolower(stringr::str_trim(.group))   
+  ) %>% 
+  dplyr::select(-.group)
+
+letters_shoot <- as.data.frame(cld_shoot) %>%
+  dplyr::select(Carbon, Mutualist, .group) %>%
+  mutate(
+    Biomass_Type = "Shoot",
+    sig_letter   = toupper(stringr::str_trim(.group)) 
+  ) %>% 
+  dplyr::select(-.group)
+
+letters_all <- bind_rows(letters_root, letters_shoot)
+
+#join letters to summary
+legume.summary2 <- legume.summary %>% left_join(letters_all,
+            by = c("Carbon", "Mutualist", "Biomass_Type")) %>% mutate( label_text = round(abs(Mean), 2), sig_y = ifelse(
+      Biomass_Type == "Root",
+      Mean - SE - 0.2,  
+      Mean + SE + 0.2 ),
+    num_y = ifelse(
+      Biomass_Type == "Root",
+      Mean - SE - 0.18,
+      Mean + SE + 0.18
+    ))
+
+# Plot
+root.shoot.fig <- ggplot() +
+  geom_col(
+    data = legume.summary2,
+    aes(x = Carbon, y = Mean, fill = Mutualist),
+    position = position_dodge(width = 0.9),
+    width    = 0.75,
+    alpha    = 0.9,
+    color    = "black"
+  ) + geom_errorbar(
+    data = legume.summary2,
+    aes(x = Carbon,
+        ymin = Mean - SE,
+        ymax = Mean + SE,
+        group = Mutualist),
+    position = position_dodge(width = 0.9),
+    width    = 0.25,
+    linewidth = 0.8
+  ) + geom_text(
+    data = legume.summary2,
+    aes(x = Carbon, y = sig_y, label = sig_letter, group = Mutualist),
+    position = position_dodge(width = 0.9),
+    size = 6
+  ) + geom_hline(yintercept = 0, color = "black", linewidth = 0.6) + labs(
+    x = expression(CO[2]~Treatment),
+    y = "Biomass (g)"
+  ) + scale_fill_manual(
+    name   = "Microbial Treatment",
+    values = c("bisque4", "brown", "royalblue", "magenta4")
+  ) + scale_y_continuous(
+    breaks = seq(-2, 3, 0.5),
+    limits = c(-3, 3),
+    labels = function(x) abs(round(x, 2))
+  ) + theme_classic(base_size = 24) + theme(
+    legend.position = "top",
+    legend.title    = element_text(size = 24),
+    legend.text     = element_text(size = 24),
+    axis.title      = element_text(size = 24),
+    axis.text       = element_text(size = 24),
+    axis.line       = element_line(color = "black"),
+    axis.ticks      = element_line(color = "black")
+  ) +
+  annotate(
+    "text", x = 0.6,
+    y = max(legume.summary2$Mean[legume.summary2$Biomass_Type == "Shoot"]) + 0.3,
+    label = "Shoot biomass", hjust = 0, size = 6, fontface = "bold"
+  ) +
+  annotate(
+    "text", x = 0.6,
+    y = min(legume.summary2$Mean[legume.summary2$Biomass_Type == "Root"]) - 0.3,
+    label = "Root biomass", hjust = 0, size = 6, fontface = "bold"
+  ) +
+  coord_cartesian(ylim = c(-1, 1.5))
+
+ggsave("root.shoot.png", root.shoot.fig, dpi=300, width = 12, height = 7, units = "in")
+```
+
+#AM fungal colonization and Nodule presence/absence
+```{r}
+###########nodule number (creating binary category)
+legume_df$nod_binary <- ifelse(legume_df$nod_number> 0, 1, 0)
+
+#binary model for nodule number
+model_nod_bin <- glm(
+  nod_binary ~ Carbon * Mutualist,
+  family = binomial,
+  data = legume_df
+)
+
+summary(model_nod_bin)
+anova(model_nod_bin, test = "Chisq")
+anova(model_nod_bin)
+
+#model diagnostics
+res_nod <- simulateResiduals(model_nod_bin, n = 500)
+plot(res_nod)
+
+#emmeans
+emm_nod<- emmeans(model_nod_bin, ~ Mutualist)
+
+cld_nod <- cld(
+  emm_nod,
+  Letters = LETTERS,
+  adjust  = "tukey"
+)
+
+letters_nod <- as.data.frame(cld_nod) %>%
+  transmute(
+    Mutualist,
+    sig_nod = tolower(str_trim(.group)) 
+  )
+
+
+##########AM fungal colonization
+
+model_amf <- lm(AMF_colonization_percent ~ Carbon * Mutualist, data = legume_df)
+anova(model_amf)
+
+emm_amf <- emmeans(model_amf, ~ Carbon * Mutualist)
+
+cld_amf <- cld(emm_amf, Letters = LETTERS,adjust  = "tukey")
+
+letters_amf <- as.data.frame(cld_amf) %>%
+  transmute(
+    Carbon,
+    Mutualist,
+    sig_amf = str_trim(.group)  
+  )
+
+##create a dataset with mean, se, and significant letters
+
+plot_df <- legume_df %>%
+  group_by(Carbon, Mutualist) %>%
+  dplyr::summarise(
+    mean_amf = mean(AMF_colonization_percent, na.rm = TRUE),
+    se_amf   = sd(AMF_colonization_percent, na.rm = TRUE) / sqrt(sum(!is.na(AMF_colonization_percent))),
+    mean_nod = mean(nod_binary, na.rm = TRUE),
+    se_nod   = sd(nod_binary, na.rm = TRUE) / sqrt(sum(!is.na(nod_binary))),
+    .groups = "drop"
+  )
+###join nodule and amf significant letters for plotting
+plot_df2 <- plot_df %>%
+  left_join(letters_amf, by = c("Carbon", "Mutualist")) %>%
+  left_join(letters_nod, by = c( "Mutualist")) %>%
+  mutate(
+    amf_y = mean_amf + se_amf + 4,    
+    nod_y = mean_nod + se_nod + 0.7 
+  )
+
+## plot AMF colonization 
+dodge <- position_dodge(width = 0.6)
+levels(factor(plot_df2$Mutualist))
+
+colors <- c(
+  "Control"      = "bisque4",
+  "Rhizobia"     = "brown",
+  "AMF"          = "royalblue",
+  "AMF+Rhizobia" = "magenta4"
+)
+p_amf <- ggplot(plot_df2,
+                aes(x = Carbon, y = mean_amf, fill = Mutualist)) +
+  geom_col(position = dodge, width = 0.6, alpha = 0.95, color = "black") +
+  geom_errorbar(aes(ymin = mean_amf - se_amf,
+                    ymax = mean_amf + se_amf),
+                position = dodge, width = 0.2, linewidth = 0.7) +
+  geom_text(aes(y = amf_y, label = sig_amf, group = Mutualist),
+            position = dodge, size = 6, fontface = "plain") +
+  scale_fill_manual(values = colors, name = "Microbial Treatment") +
+  labs(x = expression(CO[2]~Treatment),
+       y = "AMF colonization (%)") +
+  coord_cartesian(ylim = c(0, max(plot_df2$amf_y, na.rm = TRUE) + 1)) +
+  theme_classic(base_size = 24) +
+  theme(
+    legend.position = "top",
+    legend.title    = element_blank(),
+    axis.title.y    = element_text(face = "plain"),
+    axis.text       = element_text(size = 24),
+    plot.title      = element_text(face = "bold"),
+    panel.border    = element_rect(color = "black", fill = NA, linewidth = 0.8)
+  )
+
+#plot nodules binary model
+nod_simple <- plot_df2 %>%
+  group_by(Mutualist) %>%
+  dplyr::summarise(
+    mean_nod = mean(mean_nod, na.rm = TRUE),
+    se_nod   = sqrt(sum(se_nod^2)) / n(), 
+    .groups = "drop"
+  )
+p_nod <- ggplot(nod_simple,
+                aes(x = Mutualist, y = mean_nod, fill = Mutualist)) +
+  geom_col(width = 0.6, alpha = 0.95, color = "black") +
+  geom_errorbar(aes(ymin = mean_nod - se_nod,
+                    ymax = mean_nod + se_nod),
+                width = 0.2, linewidth = 0.8) +
+  scale_fill_manual(values = colors, name = "Microbial Treatment") +
+  labs(x = "Microbial Treatment",
+       y = "Nodules presence/absence") +
+  coord_cartesian(ylim = c(0, max(nod_simple$mean_nod + nod_simple$se_nod) + 0.5)) +
+  theme_classic(base_size = 24) +
+  theme(
+    legend.position = "top",
+    axis.title.x    = element_text(face = "plain"),
+    axis.title.y    = element_text(face = "plain"),
+    axis.text       = element_text(size = 24),
+    panel.border    = element_rect(color = "black", fill = NA, linewidth = 0.8)
+  )
+
+#Combine amf and nodule number figures
+
+p_amf2 <- p_amf + theme(legend.position = "top")
+
+p_nod2 <- p_nod + theme(legend.position = "top")
+
+final_fig <- ggarrange(
+  p_amf2,
+  p_nod2,
+  ncol = 2,
+  labels = c("A)", "B)"),
+  font.label = list(size = 24, face = "bold"),  
+  common.legend = TRUE,
+  legend = "top"
+)
+
+final_fig
+ggsave("nod.amf.new.png", final_fig, dpi=300, width = 18, height = 10, units = "in")
+```
+
+#plant nutrients
+```{r}
+Nutrient <- read_csv("Nutrient.csv")
+str(Nutrient)
+Nutrient$carbon=as.character(Nutrient$carbon)
+Nutrient$chamber=as.character(Nutrient$chamber)
+
+unique(Nutrient$Mutualist)
+
+Nutrient.final <- Nutrient %>% dplyr::rename(Carbon = carbon) %>%  mutate(Mutualist=case_when(Mutualist=="control"~"Control", Mutualist=="amf"~"AMF", Mutualist=="rhizobia"~"Rhizobia", Mutualist=="both"~"AMF+Rhizobia"))%>% mutate( Carbon = factor(Carbon, levels = c("400","600","1000")))
+
+colnames(Nutrient.final)
+
+## Color scheme
+colors <- c(
+  "Control"      = "bisque4",
+  "Rhizobia"     = "brown",
+  "AMF"          = "royalblue",
+  "AMF+Rhizobia" = "magenta4"
+)
+
+# Summaries
+nutrient_summary <- Nutrient.final %>%
+  group_by(Carbon, Mutualist) %>%
+  dplyr::summarise(
+    mean_N = mean(N_percent, na.rm = TRUE),
+    se_N   = sd(N_percent,  na.rm = TRUE) / sqrt(sum(!is.na(N_percent))),
+    mean_P = mean(P_percent, na.rm = TRUE),
+    se_P   = sd(P_percent,  na.rm = TRUE) / sqrt(sum(!is.na(P_percent))),
+    .groups = "drop"
+  )
+
+#models
+model_N <- lm(N_percent ~ Carbon * Mutualist, data = Nutrient.final)
+model_P <- lm(P_percent ~ Carbon * Mutualist, data = Nutrient.final)
+anova(model_N)
+anova(model_P)
+
+#emmeans and significant letters
+emm_N <- emmeans(model_N, ~ Carbon * Mutualist)
+emm_P <- emmeans(model_P, ~ Carbon * Mutualist)
+
+cld_N <- cld(emm_N, adjust = "tukey", Letters = letters) %>%
+  as.data.frame() %>%
+  dplyr::select(Carbon, Mutualist, sig_N = .group)
+
+cld_P <- cld(emm_P, adjust = "tukey", Letters = letters) %>%
+  as.data.frame() %>%
+  dplyr::select(Carbon, Mutualist, sig_P = .group)
+
+## Merge letters into summary and set y-positions
+nutrient_summary2 <- nutrient_summary %>%
+  left_join(cld_N, by = c("Carbon", "Mutualist")) %>%
+  left_join(cld_P, by = c("Carbon", "Mutualist")) %>%
+  mutate(
+    y_N = mean_N + se_N + 0.06, 
+    y_P = mean_P + se_P + 0.006
+  )
+
+
+#plot nitrogen
+dodge <- position_dodge(width = 0.6)
+p_N <- ggplot(nutrient_summary2,
+              aes(x = Carbon, y = mean_N, fill = Mutualist)) +
+  geom_col(position = dodge, width = 0.6, alpha = 0.95, color = "black") +
+  geom_errorbar(aes(ymin = mean_N - se_N,
+                    ymax = mean_N + se_N),
+                position = dodge, width = 0.2, linewidth = 0.7) +
+  geom_text(aes(y = y_N, label = sig_N),
+            position = dodge, vjust = -0.6, hjust=0.55, size = 6, fontface = "plain") +
+  scale_fill_manual(values = colors,
+                    name = "Microbial Treatment") +
+  labs(
+    x = expression(CO[2]~Treatment),
+    y = "Plant N (%)"
+  ) +
+  coord_cartesian(ylim = c(0, max(nutrient_summary2$y_N, na.rm = TRUE) + 0.05)) +
+  theme_classic(base_size = 24) +
+  theme(
+    legend.position = "top",
+    legend.title    = element_blank(),
+    axis.title.y    = element_text(face = "plain"),
+    axis.text       = element_text(size = 24),
+    panel.border    = element_rect(color = "black", fill = NA, linewidth = 0.8)
+  )
+
+#plot phosphorus
+p_P <- ggplot(nutrient_summary2,
+              aes(x = Carbon, y = mean_P, fill = Mutualist)) +
+  geom_col(position = dodge, width = 0.6, alpha = 0.95, color = "black") +
+  geom_errorbar(aes(ymin = mean_P - se_P,
+                    ymax = mean_P + se_P),
+                position = dodge, width = 0.2, linewidth = 0.7) +
+  geom_text(aes(y = y_P, label = sig_P),
+            position = dodge, vjust = -0.6,hjust=0.75, size = 6, fontface = "plain") +
+  scale_fill_manual(values = colors,
+                    name = "Microbial Treatment") +
+  labs(
+    x = expression(CO[2]~Treatment),
+    y = "Plant P (%)"
+  ) +
+  coord_cartesian(ylim = c(0, max(nutrient_summary2$y_P, na.rm = TRUE) + 0.005)) +
+  theme_classic(base_size = 24) +
+  theme(
+    legend.position = "top",
+    legend.title    = element_blank(),
+    axis.title.y    = element_text(face = "plain"),
+    axis.text       = element_text(size = 24),
+    panel.border    = element_rect(color = "black", fill = NA, linewidth = 0.8)
+  )
+
+#combine N and P figures
+final_nutrient_fig <- ggarrange(
+  p_N,
+  p_P,
+  ncol = 2,
+  labels = c("A)", "B)"),
+  font.label = list(size = 24, face = "bold"),
+  common.legend = TRUE,
+  legend = "top",
+  widths = c(1, 1),   
+  align = "hv"
+)
+
+final_nutrient_fig
+ggsave("n.p.new.png", final_nutrient_fig, dpi=300, width = 12, height = 7, units = "in")
+```
+
+##Synergy index
+
+```{r}
+synergy_df <- legume_df %>% mutate(AMF_proportion= AMF_colonization_percent/100) %>%
+  mutate(
+    Carbon    = factor(Carbon, levels = c("400", "600", "1000")),
+    Mutualist = factor(Mutualist,
+                       levels = c("Control", "Rhizobia", "AMF", "AMF+Rhizobia")),
+    total_biomass = Shoot_biomass_g + Root_biomass_g 
+  )
+
+# Linear model
+m_biom <- lm(total_biomass ~ Carbon * Mutualist, data = synergy_df)
+
+# Estimated marginal means for each CO2 x mutualist treatment
+emm_biom <- emmeans(m_biom, ~ Mutualist | Carbon)
+
+
+# synergy contrast = Dual + Control - AMF - Rhizobia
+syn_contr <- contrast(
+  emm_biom,
+  list(
+    synergy = c(
+      "Control"      =  1,
+      "Rhizobia"     = -1,
+      "AMF"          = -1,
+      "AMF+Rhizobia" =  1
+    )
+  ),
+  by = "Carbon"
+)
+syn_df <- as.data.frame(syn_contr)
+syn_df <- as.data.frame(confint(syn_contr))
+
+gg_syn <- ggplot(syn_df,
+                 aes(x = Carbon, y = estimate)) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = lower.CL, ymax = upper.CL),
+                width = 0.15, linewidth = 0.7) +
+  labs(
+    x = expression(CO[2]~Treatment),
+    y = "Synergy index"
+  ) +
+  theme_classic(base_size = 24) +
+  theme(
+    axis.title.y = element_text(face = "plain"),
+    axis.title.x = element_text(face = "bold"),
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 0.8)
+  )
+
+gg_syn
+
+```
+
+##root:shoot ratio
+```{r}
+#Add root:shoot ratio
+root_shoot_df <- legume_df %>%
+  mutate(
+    Carbon    = factor(Carbon, levels = c("400", "600", "1000")),
+    Mutualist = factor(Mutualist,
+                       levels = c("Control", "Rhizobia", "AMF", "AMF+Rhizobia")),
+    root_shoot = Root_biomass_g / Shoot_biomass_g       
+  ) %>%
+  filter(is.finite(root_shoot))       
+#Model
+model_rs <- lm(root_shoot ~ Carbon * Mutualist, data = root_shoot_df)
+anova(model_rs)
+
+#emmeans and significant letters
+emm_rs <- emmeans(model_rs, ~ Mutualist | Carbon)
+
+cld_rs <- cld(emm_rs, adjust = "tukey", Letters = letters) %>%
+  as.data.frame() %>%
+  dplyr::select(Carbon, Mutualist, sig_rs = .group)
+
+rs_summary <- root_shoot_df %>%
+  group_by(Carbon, Mutualist) %>%
+  dplyr::summarise(
+    mean_rs = mean(root_shoot, na.rm = TRUE),
+    se_rs   = sd(root_shoot,  na.rm = TRUE) / sqrt(sum(!is.na(root_shoot))),
+    .groups = "drop"
+  ) %>%
+  left_join(cld_rs, by = c("Carbon", "Mutualist")) %>%
+  mutate(
+    y_lab = mean_rs + se_rs + 0.05 )
+
+dodge <- position_dodge(width = 0.6)
+
+p_rs <- ggplot(rs_summary,
+               aes(x = Carbon, y = mean_rs, fill = Mutualist)) +
+  geom_col(position = dodge, width = 0.6, alpha = 0.95, color = "black") +
+  geom_errorbar(aes(ymin = mean_rs - se_rs,
+                    ymax = mean_rs + se_rs),
+                position = dodge, width = 0.2, linewidth = 0.7) +
+  geom_text(aes(y = y_lab, label = sig_rs),
+            position = dodge, size = 6, fontface = "bold") +
+  scale_fill_manual(values = colors,
+                    name = "Microbial Treatment") +
+  labs(
+    x = expression(CO[2]~Treatment),
+    y = "Root:shoot"
+  ) +
+  coord_cartesian(ylim = c(0, max(rs_summary$y_lab, na.rm = TRUE) + 0.05)) +
+  theme_classic(base_size = 24) +
+  theme(
+    legend.position = "top",
+    legend.title    = element_blank(),
+    axis.title.y    = element_text(face = "plain"),
+    axis.title.x    = element_text(face = "bold"),
+    axis.text       = element_text(size = 24),
+    panel.border    = element_rect(color = "black", fill = NA, linewidth = 0.8)
+  )
+
+p_rs
+final_fig_biomass <- ggarrange(root.shoot.fig, p_rs, gg_syn,
+  ncol = 1,
+  labels = c("A)", "B)", "C)"),
+  font.label = list(size = 24, face = "bold"),
+  common.legend = TRUE,
+  legend = "top"
+)
+
+
+final_fig_biomass
+ggsave("biomass.new.png", final_fig_biomass, dpi=300, width = 12, height = 12, units = "in")
+```
+
+##nodule number
+```{r}
+nod_pos <- subset(
+  legume_df,
+  nod_number > 0 & Mutualist %in% c("Rhizobia", "AMF+Rhizobia")
+)
+
+#model
+m_nod_count_pois <- glm(
+  nod_number ~ Carbon * Mutualist,
+  family = poisson,
+  data = nod_pos
+)
+anova(m_nod_count_pois)
+#overdispersion check
+overdisp_ratio <- sum(residuals(m_nod_count_pois, type = "pearson")^2) /
+                  m_nod_count_pois$df.residual
+overdisp_ratio #no overdispersion, so the model is good
+
+nod_pos$Carbon <- factor(nod_pos$Carbon, levels = c("400", "600", "1000"))
+
+# emmeans model
+emm_nod <- emmeans(m_nod_count_pois, ~ Carbon * Mutualist)
+
+# significant letters
+nod_cld <- cld(emm_nod, Letters = letters, adjust = "tukey") %>%
+  as.data.frame() %>%
+  mutate(
+    Carbon = factor(Carbon, levels = c("400","600","1000")))
+
+
+# Colors 
+colors <- c(
+  "Control"      = "bisque4",
+  "Rhizobia"     = "brown",
+  "AMF"          = "royalblue",
+  "AMF+Rhizobia" = "magenta4")
+
+# nodule number among nodulated plants
+nod_summary <- nod_pos %>%
+  group_by(Carbon, Mutualist) %>%
+  dplyr::summarise(
+    mean_nod = mean(nod_number),
+    se_nod   = sd(nod_number) / sqrt(n()),
+    n        = n(),
+    .groups = "drop")
+
+nod_summary_lab <- nod_summary %>%
+  left_join(nod_cld %>% dplyr::select(Carbon, Mutualist, .group),
+            by = c("Carbon", "Mutualist")) %>%
+  mutate(
+    letters = trimws(.group), 
+    label_y = mean_nod + se_nod + 0.3   
+  )
+# Position dodge for grouped bars
+dodge <- position_dodge(width = 0.7)
+
+# Bar plot
+p_nod_intensity <- ggplot(nod_summary_lab,
+                          aes(x = Carbon, y = mean_nod, fill = Mutualist)) +
+  geom_col(position = dodge, width = 0.6, color = "black", alpha = 0.95) +
+
+  geom_errorbar(
+    aes(ymin = mean_nod - se_nod, ymax = mean_nod + se_nod),
+    width = 0.15,
+    position = dodge,
+    linewidth = 0.7
+  ) +
+
+  # --- LETTERS ---
+  geom_text(
+    aes(y = label_y, label = letters, group = Mutualist),
+    position = position_dodge(width = 0.7),
+    size = 5,
+    fontface = "bold"
+  ) +
+
+  scale_fill_manual(values = colors, name = "Microbial treatment") +
+  labs(
+    x = expression(CO[2]~treatment~"(ppm)"),
+    y = "Nodule number (nodulated plants only)"
+  ) +
+  theme_classic(base_size = 14) +
+  theme(
+    legend.position = "top",
+    legend.title    = element_blank(),
+    axis.title.y    = element_text(face = "bold"),
+    axis.title.x    = element_text(face = "bold"),
+    axis.text       = element_text(size = 12),
+    panel.border    = element_rect(color = "black", fill = NA, linewidth = 0.8)
+  )
+
+p_nod_intensity
+
+
+
+##carbon figure
+emm_carbon <- emmeans(m_nod_count_pois, ~ Carbon)
+
+carbon_cld <- cld(emm_carbon, Letters = letters, adjust = "tukey") %>%
+  as.data.frame() %>%
+  mutate(
+    Carbon = factor(Carbon, levels = c("400","600","1000")),
+    letters = trimws(.group)
+  )
+
+# summary stats
+carbon_summary <- nod_pos %>%
+  group_by(Carbon) %>%
+  dplyr::summarise(
+    mean_nod = mean(nod_number),
+    se_nod   = sd(nod_number) / sqrt(n()),
+    n        = n(),
+    .groups  = "drop"
+  ) %>%
+  left_join(carbon_cld %>% dplyr::select(Carbon, letters), by = "Carbon") %>%
+  mutate(label_y = mean_nod + se_nod + 0.3)
+
+p_nod_carbon <- ggplot(carbon_summary, aes(x = Carbon, y = mean_nod)) +
+  geom_col(width = 0.6, color = "black", alpha = 0.95, fill = "grey70") +
+  geom_errorbar(aes(ymin = mean_nod - se_nod, ymax = mean_nod + se_nod),
+                width = 0.15, linewidth = 0.7) +
+  geom_text(aes(y = label_y, label = letters),
+            size = 5, fontface = "bold") +
+  labs(
+    x = expression(CO[2]~treatment~"(ppm)"),
+    y = "Nodule number (nodulated plants only)"
+  ) +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.title.y = element_text(face = "bold"),
+    axis.title.x = element_text(face = "bold"),
+    axis.text    = element_text(size = 12),
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 0.8)
+  )
+
+p_nod_carbon
+
+
+#Mutualist only
+emm_mut <- emmeans(m_nod_count_pois, ~ Mutualist)
+
+mut_cld <- cld(emm_mut, Letters = letters, adjust = "tukey") %>%
+  as.data.frame() %>%
+  mutate(
+    Mutualist = factor(Mutualist, levels = c("Rhizobia","AMF+Rhizobia")),
+    letters = trimws(.group)
+  )
+
+# summary stats
+mut_summary <- nod_pos %>%
+  group_by(Mutualist) %>%
+  dplyr::summarise(
+    mean_nod = mean(nod_number),
+    se_nod   = sd(nod_number) / sqrt(n()),
+    n        = n(),
+    .groups  = "drop"
+  ) %>%
+  left_join(mut_cld %>% dplyr::select(Mutualist, letters), by = "Mutualist") %>%
+  mutate(label_y = mean_nod + se_nod + 0.3)
+
+p_nod_mutualist <- ggplot(mut_summary, aes(x = Mutualist, y = mean_nod, fill = Mutualist)) +
+  geom_col(width = 0.6, color = "black", alpha = 0.95) +
+  geom_errorbar(aes(ymin = mean_nod - se_nod, ymax = mean_nod + se_nod),
+                width = 0.15, linewidth = 0.7) +
+  geom_text(aes(y = label_y, label = letters),
+            size = 5, fontface = "bold") +
+  scale_fill_manual(values = colors, guide = "none") +
+  labs(
+    x = NULL,
+    y = "Nodule number (nodulated plants only)"
+  ) +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.title.y = element_text(face = "bold"),
+    axis.text.x  = element_text(size = 12),
+    axis.text.y  = element_text(size = 12),
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 0.8)
+  )
+
+p_nod_mutualist
+
+```
+
+
+
+```
