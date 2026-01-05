@@ -231,7 +231,7 @@ cld_nod <- cld(
 letters_nod <- as.data.frame(cld_nod) %>%
   transmute(
     Mutualist,
-    sig_nod = tolower(str_trim(.group)) 
+    sig_nod = toupper(str_trim(.group)) 
   )
 
 
@@ -249,7 +249,7 @@ letters_amf <- as.data.frame(cld_amf) %>%
     Carbon,
     Mutualist,
     sig_amf = str_trim(.group)  
-  )
+  ) %>% mutate(sig_amf = toupper(sig_amf))
 
 ##create a dataset with mean, se, and significant letters
 
@@ -394,11 +394,11 @@ emm_P <- emmeans(model_P, ~ Carbon * Mutualist)
 
 cld_N <- cld(emm_N, adjust = "tukey", Letters = letters) %>%
   as.data.frame() %>%
-  dplyr::select(Carbon, Mutualist, sig_N = .group)
+  dplyr::select(Carbon, Mutualist, sig_N = .group) %>% mutate(sig_N = toupper(sig_N))
 
 cld_P <- cld(emm_P, adjust = "tukey", Letters = letters) %>%
   as.data.frame() %>%
-  dplyr::select(Carbon, Mutualist, sig_P = .group)
+  dplyr::select(Carbon, Mutualist, sig_P = .group) %>% mutate(sig_P = toupper(sig_P))
 
 ## Merge letters into summary and set y-positions
 nutrient_summary2 <- nutrient_summary %>%
@@ -419,7 +419,7 @@ p_N <- ggplot(nutrient_summary2,
                     ymax = mean_N + se_N),
                 position = dodge, width = 0.2, linewidth = 0.7) +
   geom_text(aes(y = y_N, label = sig_N),
-            position = dodge, vjust = -0.6, hjust=0.55, size = 6, fontface = "plain") +
+            position = dodge, vjust = -0.3, hjust=0.55, size = 4, fontface = "plain") +
   scale_fill_manual(values = colors,
                     name = "Microbial Treatment") +
   labs(
@@ -444,7 +444,7 @@ p_P <- ggplot(nutrient_summary2,
                     ymax = mean_P + se_P),
                 position = dodge, width = 0.2, linewidth = 0.7) +
   geom_text(aes(y = y_P, label = sig_P),
-            position = dodge, vjust = -0.6,hjust=0.75, size = 6, fontface = "plain") +
+            position = dodge, vjust = -1.6,hjust=0.6, size = 4, fontface = "plain") +
   scale_fill_manual(values = colors,
                     name = "Microbial Treatment") +
   labs(
@@ -553,7 +553,7 @@ emm_rs <- emmeans(model_rs, ~ Mutualist | Carbon)
 
 cld_rs <- cld(emm_rs, adjust = "tukey", Letters = letters) %>%
   as.data.frame() %>%
-  dplyr::select(Carbon, Mutualist, sig_rs = .group)
+  dplyr::select(Carbon, Mutualist, sig_rs = .group) %>% mutate(sig_rs = toupper(sig_rs))
 
 rs_summary <- root_shoot_df %>%
   group_by(Carbon, Mutualist) %>%
@@ -604,7 +604,7 @@ final_fig_biomass <- ggarrange(root.shoot.fig, p_rs, gg_syn,
 
 
 final_fig_biomass
-ggsave("biomass.new.png", final_fig_biomass, dpi=300, width = 12, height = 12, units = "in")
+ggsave("biomass.new.png", final_fig_biomass, dpi=300, width = 12, height = 16, units = "in")
 ```
 
 ##nodule number
@@ -788,9 +788,5 @@ p_nod_mutualist <- ggplot(mut_summary, aes(x = Mutualist, y = mean_nod, fill = M
   )
 
 p_nod_mutualist
-
-```
-
-
 
 ```
