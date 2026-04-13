@@ -11,7 +11,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r}
 installed.packages("librarian")
 library(librarian)
-shelf(tidyverse, agricolae, Hmisc, lme4, dplyr, ggplot2, emmeans, readr, nlme, lsmeans, multcomp, tidyr, installr, multcompView, vegan, lmerTest, ggsignif, plyr, janitor, lubridate, wesanderson, ggpubr, cowplot, viridis, scales, glmmTMB, reshape2, patchwork, stringr, DHARMa)
+shelf(tidyverse, agricolae, Hmisc, lme4, dplyr, ggplot2, emmeans, readr, nlme, lsmeans, multcomp, tidyr, installr, multcompView, vegan, lmerTest, ggsignif, plyr, janitor, lubridate, wesanderson, ggpubr, cowplot, viridis, scales, glmmTMB, reshape2, patchwork, stringr, car, DHARMa)
 
 ```
 
@@ -204,42 +204,74 @@ ggsave("root.shoot.png", root.shoot.fig, dpi=300, width = 12, height = 7, units 
 ###########nodule number (creating binary category)
 legume_df$nod_binary <- ifelse(legume_df$nod_number> 0, 1, 0)
 
-#binary model for nodule number
-model_nod_bin <- glm(
-  nod_binary ~ Carbon * Mutualist,
+
+model_nod_bin <- glmer(
+  nod_binary ~ Carbon * Mutualist + (1 | Chamber),
   family = binomial,
   data = legume_df
 )
-
 summary(model_nod_bin)
-anova(model_nod_bin, test = "Chisq")
-anova(model_nod_bin)
+Anova(model_nod_bin, type = 3)
 
 #model diagnostics
 res_nod <- simulateResiduals(model_nod_bin, n = 500)
 plot(res_nod)
 
 #emmeans
-emm_nod<- emmeans(model_nod_bin, ~ Mutualist)
+
+emm_nod <- emmeans(model_nod_bin, ~ Mutualist)
 
 cld_nod <- cld(
   emm_nod,
   Letters = LETTERS,
-  adjust  = "tukey"
+  adjust = "tukey"
 )
 
 letters_nod <- as.data.frame(cld_nod) %>%
   transmute(
     Mutualist,
-    sig_nod = toupper(str_trim(.group)) 
+    sig_nod = toupper(trimws(.group))
   )
 
+# summary for plotting
+nod_simple <- plot_df2 %>%
+  group_by(Mutualist) %>%
+  dplyr::summarise(
+    mean_nod = mean(mean_nod, na.rm = TRUE),
+    se_nod   = sqrt(sum(se_nod^2)) / n(),
+    .groups = "drop"
+  ) %>%
+  left_join(letters_nod, by = "Mutualist") %>%
+  mutate(
+    nod_y = mean_nod + se_nod + 0.08
+  )
 
-##########AM fungal colonization
+# plot
+p_nod <- ggplot(nod_simple,
+                aes(x = Mutualist, y = mean_nod, fill = Mutualist)) +
+  geom_col(width = 0.6, alpha = 0.95, color = "black") +
+  geom_errorbar(aes(ymin = mean_nod - se_nod,
+                    ymax = mean_nod + se_nod),
+                width = 0.2, linewidth = 0.8) +
+  geom_text(aes(y = nod_y, label = sig_nod),
+            size = 6, fontface = "plain") +
+  scale_fill_manual(values = colors, name = "Microbial Treatment") +
+  labs(x = "Microbial Treatment",
+       y = "Nodules presence/absence") +
+  coord_cartesian(ylim = c(0, max(nod_simple$nod_y, na.rm = TRUE) + 0.1)) +
+  theme_classic(base_size = 24) +
+  theme(
+    legend.position = "top",
+    axis.title.x    = element_text(face = "plain"),
+    axis.title.y    = element_text(face = "plain"),
+    axis.text       = element_text(size = 24),
+    panel.border    = element_rect(color = "black", fill = NA, linewidth = 0.8)
+  )
 
-model_amf <- lm(AMF_colonization_percent ~ Carbon * Mutualist, data = legume_df)
+##########AM fungal colonization #####
+
+model_amf <- lmer(AMF_colonization_percent ~ Carbon * Mutualist+ (1  + Mutualist| Chamber), data = legume_df)
 anova(model_amf)
-
 emm_amf <- emmeans(model_amf, ~ Carbon * Mutualist)
 
 cld_amf <- cld(emm_amf, Letters = LETTERS,adjust  = "tukey")
@@ -303,32 +335,7 @@ p_amf <- ggplot(plot_df2,
     panel.border    = element_rect(color = "black", fill = NA, linewidth = 0.8)
   )
 
-#plot nodules binary model
-nod_simple <- plot_df2 %>%
-  group_by(Mutualist) %>%
-  dplyr::summarise(
-    mean_nod = mean(mean_nod, na.rm = TRUE),
-    se_nod   = sqrt(sum(se_nod^2)) / n(), 
-    .groups = "drop"
-  )
-p_nod <- ggplot(nod_simple,
-                aes(x = Mutualist, y = mean_nod, fill = Mutualist)) +
-  geom_col(width = 0.6, alpha = 0.95, color = "black") +
-  geom_errorbar(aes(ymin = mean_nod - se_nod,
-                    ymax = mean_nod + se_nod),
-                width = 0.2, linewidth = 0.8) +
-  scale_fill_manual(values = colors, name = "Microbial Treatment") +
-  labs(x = "Microbial Treatment",
-       y = "Nodules presence/absence") +
-  coord_cartesian(ylim = c(0, max(nod_simple$mean_nod + nod_simple$se_nod) + 0.5)) +
-  theme_classic(base_size = 24) +
-  theme(
-    legend.position = "top",
-    axis.title.x    = element_text(face = "plain"),
-    axis.title.y    = element_text(face = "plain"),
-    axis.text       = element_text(size = 24),
-    panel.border    = element_rect(color = "black", fill = NA, linewidth = 0.8)
-  )
+
 
 #Combine amf and nodule number figures
 
@@ -615,12 +622,12 @@ nod_pos <- subset(
 )
 
 #model
-m_nod_count_pois <- glm(
-  nod_number ~ Carbon * Mutualist,
+m_nod_count_pois <- glmer(
+  nod_number ~ Carbon * Mutualist + (1 | Chamber),
   family = poisson,
   data = nod_pos
 )
-anova(m_nod_count_pois)
+Anova(m_nod_count_pois, type = 3)
 #overdispersion check
 overdisp_ratio <- sum(residuals(m_nod_count_pois, type = "pearson")^2) /
                   m_nod_count_pois$df.residual
